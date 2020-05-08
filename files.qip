@@ -40,3 +40,5 @@ set_global_assignment -name VHDL_FILE bitmap2_ctl.vhd
 set_global_assignment -name VHDL_FILE bitmap1_ctl.vhd
 set_global_assignment -name VHDL_FILE target_top.vhd
 set_global_assignment -name SYSTEMVERILOG_FILE "Arcade-MoonPatrol.sv"
+set_global_assignment -name VERILOG_FILE joydb9md.v
+set_global_assignment -name VERILOG_FILE joydb15.v
