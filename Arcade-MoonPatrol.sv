@@ -32,11 +32,15 @@ module emu
 	inout  [45:0] HPS_BUS,
 
 	//Base video clock. Usually equals to CLK_SYS.
-	output        VGA_CLK,
+	output        CLK_VIDEO,
 
-	//Multiple resolutions are supported using different VGA_CE rates.
+	//Multiple resolutions are supported using different CE_PIXEL rates.
 	//Must be based on CLK_VIDEO
-	output        VGA_CE,
+	output        CE_PIXEL,
+
+	//Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
+	output [11:0] VIDEO_ARX,
+	output [11:0] VIDEO_ARY,
 
 	output  [7:0] VGA_R,
 	output  [7:0] VGA_G,
@@ -45,25 +49,18 @@ module emu
 	output        VGA_VS,
 	output        VGA_DE,    // = ~(VBlank | HBlank)
 	output        VGA_F1,
+	output [1:0]  VGA_SL,
+	output        VGA_SCALER, // Force VGA scaler
 
-	//Base video clock. Usually equals to CLK_SYS.
-	output        HDMI_CLK,
 
-	//Multiple resolutions are supported using different HDMI_CE rates.
-	//Must be based on CLK_VIDEO
-	output        HDMI_CE,
 
-	output  [7:0] HDMI_R,
-	output  [7:0] HDMI_G,
-	output  [7:0] HDMI_B,
-	output        HDMI_HS,
-	output        HDMI_VS,
-	output        HDMI_DE,   // = ~(VBlank | HBlank)
-	output  [1:0] HDMI_SL,   // scanlines fx
-
-	//Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
-	output  [7:0] HDMI_ARX,
-	output  [7:0] HDMI_ARY,
+	// Palette control for 8bit modes.
+	// Ignored for other video modes.
+	output        FB_PAL_CLK,
+	output  [7:0] FB_PAL_ADDR,
+	output [23:0] FB_PAL_DOUT,
+	input  [23:0] FB_PAL_DIN,
+	output        FB_PAL_WR,
 
 	output        LED_USER,  // 1 - ON, 0 - OFF.
 
@@ -73,10 +70,11 @@ module emu
 	output  [1:0] LED_POWER,
 	output  [1:0] LED_DISK,
 
+	input         CLK_AUDIO, // 24.576 MHz
 	output [15:0] AUDIO_L,
 	output [15:0] AUDIO_R,
 	output        AUDIO_S,   // 1 - signed audio samples, 0 - unsigned
-	
+
 	// Open-drain User port.
 	// 0 - D+/RX
 	// 1 - D-/TX
@@ -86,11 +84,10 @@ module emu
 	output	[1:0] USER_MODE,
 	input	[7:0] USER_IN,
 	output	[7:0] USER_OUT
-	
-	
 );
 
 assign VGA_F1    = 0;
+assign VGA_SCALER= 0;
 wire         CLK_JOY = CLK_50M;         //Assign clock between 40-50Mhz
 wire   [2:0] JOY_FLAG  = {status[30],status[31],status[29]}; //Assign 3 bits of status (31:29) o (63:61)
 wire         JOY_CLK, JOY_LOAD, JOY_SPLIT, JOY_MDSEL;
@@ -101,16 +98,21 @@ assign       USER_MODE = JOY_FLAG[2:1] ;
 assign       USER_OSD  = joydb_1[10] & joydb_1[6];
 
 assign LED_USER  = ioctl_download;
-assign LED_DISK  = 0;
-assign LED_POWER = 0;
+assign LED_DISK  = 1'b0;
+assign LED_POWER = 1'b0;
 
-assign HDMI_ARX = status[1] ? 8'd16 : 8'd4;
-assign HDMI_ARY = status[1] ? 8'd9  : 8'd3;
+assign {FB_PAL_CLK,  FB_PAL_ADDR, FB_PAL_DOUT, FB_PAL_WR} = '0;
+
+reg [1:0] ar;
+
+assign VIDEO_ARX =  (!ar) ? ( 8'd4) : (ar - 1'd1);
+assign VIDEO_ARY =  (!ar) ? ( 8'd3) : 12'd0;
+
 
 `include "build_id.v" 
 localparam CONF_STR = {
 	"A.MOONPT;;",
-	"H0O1,Aspect Ratio,Original,Wide;",
+	"H0OEF,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O35,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"-;",
 	"OUV,UserIO Joystick,Off,DB9MD,DB15 ;",
@@ -118,7 +120,7 @@ localparam CONF_STR = {
 	"-;",
 	"R0,Reset;",
 	"J1,Fire,Jump,Start,Coin;",
-	"jn,A,Start,Select,R;",
+	"jn,A,B,Start,R;",
 	"V,v",`BUILD_DATE
 };
 
@@ -141,7 +143,8 @@ pll pll
 
 wire [31:0] status;
 wire  [1:0] buttons;
-wire        forced_scandoubler;
+reg         forced_scandoubler;
+wire        sd;
 wire        direct_video;
 
 wire        ioctl_download;
@@ -149,7 +152,6 @@ wire        ioctl_wr;
 wire [24:0] ioctl_addr;
 wire  [7:0] ioctl_dout;
 
-wire [10:0] ps2_key;
 
 wire [15:0] joystick_0_USB, joystick_1_USB;
 wire [15:0] joy = joystick_0 | joystick_1;
@@ -202,7 +204,7 @@ hps_io #(.STRLEN($size(CONF_STR)>>3)) hps_io
 	.buttons(buttons),
 	.status(status),
 	.status_menumask(direct_video),
-	.forced_scandoubler(forced_scandoubler),
+	.forced_scandoubler(sd),
 	.gamma_bus(gamma_bus),
 	.direct_video(direct_video),
 
@@ -214,131 +216,67 @@ hps_io #(.STRLEN($size(CONF_STR)>>3)) hps_io
 	.joystick_0(joystick_0_USB),
 	.joystick_1(joystick_1_USB),
 	.joy_raw(joydb_1[5:0] | joydb_2[5:0]),
-	.ps2_key(ps2_key)
 );
 
-wire       pressed = ps2_key[9];
-wire [8:0] code    = ps2_key[8:0];
-always @(posedge clk_sys) begin
-	reg old_state;
-	old_state <= ps2_key[10];
-	
-	if(old_state != ps2_key[10]) begin
-		casex(code)
-			'hX75: btn_up         <= pressed; // up
-			'hX72: btn_down       <= pressed; // down
-			'hX6B: btn_left       <= pressed; // left
-			'hX74: btn_right      <= pressed; // right
-			'h029: btn_jump       <= pressed; // space
-			'h014: btn_fire       <= pressed; // ctrl
+wire m_up     = joy[3];
+wire m_down   = joy[2];
+wire m_left   = joy[1];
+wire m_right  = joy[0];
+wire m_fire   = joy[4];
+wire m_jump   = joy[5];
 
-			'h005: btn_one_player <= pressed; // F1
-			'h006: btn_two_players <= pressed; // F2
+wire m_up_2   = joy[3];
+wire m_down_2 = joy[2];
+wire m_left_2 = joy[1];
+wire m_right_2= joy[0];
+wire m_fire_2 = joy[4];
+wire m_jump_2 = joy[5];
 
- // JPAC/IPAC/MAME Style Codes
-			'h016: btn_start_1     <= pressed; // 1
-			'h01E: btn_start_2     <= pressed; // 2
-			'h02E: btn_coin_1      <= pressed; // 5
-			'h036: btn_coin_2      <= pressed; // 6
-			'h02D: btn_up_2        <= pressed; // R
-			'h02B: btn_down_2      <= pressed; // F
-			'h023: btn_left_2      <= pressed; // D
-			'h034: btn_right_2     <= pressed; // G
-			'h01C: btn_fire_2      <= pressed; // A
-			'h01B: btn_jump_2      <= pressed; // S
-		endcase
-	end
-end
+wire m_start1 = joy[6];
+wire m_start2 = joy[6];
+wire m_coin   = joy[7];
 
-reg btn_up    = 0;
-reg btn_down  = 0;
-reg btn_right = 0;
-reg btn_left  = 0;
-reg btn_fire  = 0;
-reg btn_jump  = 0;
-reg btn_one_player  = 0;
-reg btn_two_players  = 0;
-
-reg btn_start_1=0;
-reg btn_start_2=0;
-reg btn_coin_1=0;
-reg btn_coin_2=0;
-reg btn_up_2=0;
-reg btn_down_2=0;
-reg btn_left_2=0;
-reg btn_right_2=0;
-reg btn_fire_2=0;
-reg btn_jump_2=0;
-
-
-
-wire m_up     = btn_up   | joy[3];
-wire m_down   = btn_down | joy[2];
-wire m_left   = btn_left | joy[1];
-wire m_right  = btn_right| joy[0];
-wire m_fire   = btn_fire | joy[4];
-wire m_jump   = btn_jump | joy[5];
-
-wire m_up_2     = btn_up_2    | joy[3];
-wire m_down_2   = btn_down_2  | joy[2];
-wire m_left_2   = btn_left_2  | joy[1];
-wire m_right_2  = btn_right_2 | joy[0];
-wire m_fire_2  = btn_fire_2 |joy[4];
-wire m_jump_2  = btn_jump_2 |joy[5];
-
-
-
-
-
-wire m_start1 = btn_one_player  | joy[6];
-wire m_start2 = btn_two_players  | joy[6];
-wire m_coin   = m_start1|m_start2 | joy[7];
-
-wire HSync, VSync;
-wire HBlank, VBlank;
+wire hbl,vbl,hs,vs;
 wire [3:0] r,g,b;
 
-
-reg ce_vid;
 reg clk_6; // nasty! :)
-reg clk_24; 
 always @(negedge clk_vid) begin
 	reg [2:0] div;
 
 	div <= div + 1'd1;
-	ce_vid <= !div;
 	clk_6 <= div[2];
-	clk_24 <= ~div[0];
 end
 
 reg ce_pix;
+reg [11:0] rgb;
+reg HSync,VSync,HBlank,VBlank;
+reg [2:0] fx;
 always @(posedge clk_vid) begin
-        reg [2:0] div;
+	reg [2:0] div;
 
-        div <= div + 1'd1;
-        ce_pix <= !div;
+	div <= div + 1'd1;
+	ce_pix <= !div;
+	rgb <= {r,g,b};
+	HSync <= ~hs;
+	VSync <= ~vs;
+	HBlank <= hbl;
+	VBlank <= vbl;
+	fx <= status[5:3];
+	ar <= status[15:14];
+	forced_scandoubler <= sd;
 end
 
-//arcade_fx #(512,12) arcade_video
-arcade_fx #(256,12) arcade_video
+arcade_video #(256,12) arcade_video
 (
-        .*,
-        .clk_video(clk_vid),
-
-        .RGB_in({r,g,b}),
-
-        .fx(status[5:3])
+	.*,
+	.clk_video(clk_vid),
+	.RGB_in(rgb)
 );
-
-
-
 
 wire [12:0] audio;
 assign AUDIO_L = {audio, 3'd0};
 assign AUDIO_R = AUDIO_L;
 assign AUDIO_S = 1;
-
-
 
 target_top moonpatrol
 (
@@ -355,15 +293,15 @@ target_top moonpatrol
 	.VGA_R(r),
 	.VGA_G(g),
 	.VGA_B(b),
-	.VGA_HS(HSync),
-	.VGA_VS(VSync),
-	.VGA_HBLANK(HBlank),
-	.VGA_VBLANK(VBlank),
+	.VGA_HS(hs),
+	.VGA_VS(vs),
+	.VGA_HBLANK(hbl),
+	.VGA_VBLANK(vbl),
 
 	.AUDIO(audio),
 
-	.JOY({m_coin|btn_coin_1|btn_coin_2, m_start1|btn_start_1, m_jump, m_fire, m_up, m_down, m_left, m_right}),
-	.JOY2({1'b0, m_start2|btn_start_2, m_jump_2, m_fire_2, m_up_2, m_down_2, m_left_2, m_right_2})
+	.JOY({m_coin, m_start1, m_jump, m_fire, m_up, m_down, m_left, m_right}),
+	.JOY2({1'b0, m_start2, m_jump_2, m_fire_2, m_up_2, m_down_2, m_left_2, m_right_2})
 );
 
 endmodule
