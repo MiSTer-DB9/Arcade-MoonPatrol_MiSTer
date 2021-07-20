@@ -55,6 +55,7 @@ module emu
 
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
+	output        HDMI_FREEZE,
 
 `ifdef MISTER_FB
 	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
@@ -182,6 +183,7 @@ assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DD
 
 assign VGA_F1    = 0;
 assign VGA_SCALER= 0;
+assign HDMI_FREEZE= 0;
 wire         CLK_JOY = CLK_50M;         //Assign clock between 40-50Mhz
 wire   [2:0] JOY_FLAG  = {status[30],status[31],status[29]}; //Assign 3 bits of status (31:29) o (63:61)
 wire         JOY_CLK, JOY_LOAD, JOY_SPLIT, JOY_MDSEL;
@@ -206,6 +208,10 @@ assign VIDEO_ARY =  (!ar) ? ( 8'd3) : 12'd0;
 `include "build_id.v" 
 localparam CONF_STR = {
 	"A.MOONPT;;",
+	"OGJ,CRT H adjust,0,+1,+2,+3,+4,+5,+6,+7,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"OKN,CRT V adjust,0,+1,+2,+3,+4,+5,+6,+7,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"O6,Video timing,Original,PAL;",
+	"-;",
 	"H0OEF,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O35,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	"O7,Pause when OSD is open,On,Off;",
@@ -242,20 +248,20 @@ reg         forced_scandoubler;
 wire        sd;
 wire        direct_video;
 
-wire				ioctl_download;
-wire				ioctl_upload;
-wire				ioctl_wr;
-wire	[7:0]		ioctl_index;
-wire	[24:0]	ioctl_addr;
-wire	[7:0]		ioctl_dout;
-wire	[7:0]		ioctl_din;
+wire        ioctl_download;
+wire        ioctl_upload;
+wire        ioctl_wr;
+wire  [7:0] ioctl_index;
+wire [24:0] ioctl_addr;
+wire  [7:0] ioctl_dout;
+wire  [7:0] ioctl_din;
 
 wire [15:0] joystick_0_USB, joystick_1_USB;
 wire [15:0] joy = joystick_0 | joystick_1;
 
-
 wire [21:0] gamma_bus;
 
+hps_io #(.CONF_STR(CONF_STR)) hps_io
 // CO S1 F2 F1 U D L R 
 wire [31:0] joystick_0 = joydb_1ena ? {joydb_1[11]|(joydb_1[10]&joydb_1[5]),joydb_1[9],joydb_1[10],joydb_1[5:0]} : joystick_0_USB;
 wire [31:0] joystick_1 = joydb_2ena ? {joydb_2[11]|(joydb_2[10]&joydb_2[5]),joydb_2[10],joydb_2[9],joydb_2[5:0]} : joydb_1ena ? joystick_0_USB : joystick_1_USB;
@@ -290,13 +296,9 @@ joy_db15 joy_db15
   .joystick1 ( JOYDB15_1 ),
   .joystick2 ( JOYDB15_2 )	  
 );
-
-hps_io #(.STRLEN($size(CONF_STR)>>3)) hps_io
 (
 	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
-
-	.conf_str(CONF_STR),
 
 	.buttons(buttons),
 	.status(status),
@@ -382,13 +384,12 @@ reg ce_pix;
 reg HSync,VSync,HBlank,VBlank;
 reg [2:0] fx;
 always @(posedge clk_vid) begin
-	reg [2:0] div;
-
-	div <= div + 1'd1;
-	ce_pix <= !div;
+	reg old_clk_v;
+	old_clk_v <= clk_6;
+	ce_pix <= (old_clk_v & ~clk_6);
 	rgb_out <= dim_video ? {r >> 1,g >> 1, b >> 1} : {r,g,b};
-	HSync <= ~hs;
-	VSync <= ~vs;
+	HSync <= hs;
+	VSync <= vs;
 	HBlank <= hbl;
 	VBlank <= vbl;
 	fx <= status[5:3];
@@ -411,6 +412,10 @@ assign AUDIO_S = 1;
 wire rom_download = ioctl_download & !ioctl_index;
 wire reset = RESET | status[0] | ioctl_download | buttons[1];
 
+wire palmode = status[6];
+wire [3:0] hs_offset = status[19:16];
+wire [3:0] vs_offset = status[23:20];
+
 target_top moonpatrol
 (
 	.clock_30(clk_sys),
@@ -430,6 +435,10 @@ target_top moonpatrol
 	.VGA_VS(vs),
 	.VGA_HBLANK(hbl),
 	.VGA_VBLANK(vbl),
+
+	.palmode(palmode),
+	.hs_offset(hs_offset),
+	.vs_offset(vs_offset),
 
 	.AUDIO(audio),
 
