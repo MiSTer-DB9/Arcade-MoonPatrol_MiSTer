@@ -29,7 +29,7 @@ module emu
 	input         RESET,
 
 	//Must be passed to hps_io module
-	inout  [45:0] HPS_BUS,
+	inout  [48:0] HPS_BUS,
 
 	//Base video clock. Usually equals to CLK_SYS.
 	output        CLK_VIDEO,
@@ -174,14 +174,21 @@ module emu
 	input         OSD_STATUS
 );
 
+///////// Default values for ports not used in this core /////////
+
+assign ADC_BUS  = 'Z;
+//assign USER_OUT = '1;
+assign {UART_RTS, UART_TXD, UART_DTR} = 0;
+assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;  
-assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 
-assign VGA_F1    = 0;
-assign VGA_SCALER= 0;
-//assign USER_OUT  = '1;
+assign VGA_F1 = 0;
+assign VGA_SCALER = 0;
+assign HDMI_FREEZE = 0;
+
+assign AUDIO_MIX = 0;
+
 wire         CLK_JOY = CLK_50M;         //Assign clock between 40-50Mhz
 wire   [2:0] JOY_FLAG  = {status[30],status[31],status[29]}; //Assign 3 bits of status (31:29) o (63:61)
 wire         JOY_CLK, JOY_LOAD, JOY_SPLIT, JOY_MDSEL;
@@ -192,11 +199,9 @@ assign       USER_MODE = JOY_FLAG[2:1] ;
 assign       USER_OSD  = joydb_1[10] & joydb_1[6];
 
 assign LED_USER  = ioctl_download;
-assign LED_DISK  = 0;
+assign LED_DISK = 0;
 assign LED_POWER = 0;
-assign BUTTONS   = 0;
-assign AUDIO_MIX = 0;
-assign HDMI_FREEZE = 0;
+assign BUTTONS = 0;
 
 reg [1:0] ar;
 
@@ -339,7 +344,7 @@ wire m_right_2= joy[0];
 wire m_fire_2 = joy[4];
 wire m_jump_2 = joy[5];
 
-wire m_start1 = joy[6];
+wire m_start1 = joystick_0[6]; // P1 start only available on 1st input device
 wire m_start2 = joy[7];
 wire m_coin1  = joystick_0[8];
 wire m_coin2  = joystick_1[8];
